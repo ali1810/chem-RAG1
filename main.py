@@ -182,6 +182,7 @@ def ingest_ep(r: IR):
     except Exception as e:
         raise HTTPException(500, str(e))
 
+@app.get("/ingest/samples")
 @app.post("/ingest/samples")
 def ingest_samples():
     res = []
@@ -205,7 +206,7 @@ def ingest_samples():
         "errors": errors,
     }
 
-@app.post("/ingest/test")
+@app.get("/ingest/test")
 def ingest_test():
     """Test endpoint to debug ingestion step by step."""
     steps = {}
