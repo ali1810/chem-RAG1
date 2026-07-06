@@ -1,12 +1,6 @@
-# API packages
-fastapi==0.111.0
-uvicorn==0.29.0
-pydantic==2.7.0
-opensearch-py==2.6.0
-requests==2.31.0
-numpy==1.26.4
-
-# Streamlit packages
+# Streamlit frontend only — API runs on Render separately
 streamlit>=1.35.0
+requests>=2.31.0
 plotly>=5.22.0
 pymupdf>=1.24.0
+pydantic==2.7.4
