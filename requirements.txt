@@ -1,5 +1,6 @@
-# Streamlit frontend only — API runs on Render separately
-streamlit
-requests
-plotly
-pymupdf
+fastapi==0.111.0
+uvicorn==0.29.0
+pydantic==2.7.4
+opensearch-py==2.6.0
+requests==2.31.0
+numpy==1.26.4
