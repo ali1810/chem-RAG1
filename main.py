@@ -185,12 +185,61 @@ def ingest_ep(r: IR):
 @app.post("/ingest/samples")
 def ingest_samples():
     res = []
+    errors = []
     for doc in SAMPLES:
         try:
-            res.append(ingest(doc["title"], doc["text"], doc["src"], doc["id"]))
+            r = ingest(doc["title"], doc["text"], doc["src"], doc["id"])
+            res.append(r)
         except Exception as e:
-            res.append({"error": str(e)})
-    return {"ingested": len(res), "details": res}
+            errors.append({"doc": doc["title"], "error": str(e)})
+    try:
+        c = get_os()
+        total = c.count(index=INDEX)["count"]
+    except Exception as e:
+        total = -1
+        errors.append({"count_error": str(e)})
+    return {
+        "ingested": len(res),
+        "total_chunks": total,
+        "results": res,
+        "errors": errors,
+    }
+
+@app.post("/ingest/test")
+def ingest_test():
+    """Test endpoint to debug ingestion step by step."""
+    steps = {}
+    # Step 1: OpenSearch connection
+    try:
+        c = get_os()
+        steps["opensearch"] = "connected"
+    except Exception as e:
+        return {"failed_at": "opensearch", "error": str(e), "steps": steps}
+    # Step 2: Index creation
+    try:
+        ensure_index(c)
+        steps["index"] = "ready"
+    except Exception as e:
+        return {"failed_at": "index", "error": str(e), "steps": steps}
+    # Step 3: HuggingFace embedding
+    try:
+        test_vec = embed(["test chemistry text"])
+        steps["embedding"] = f"ok - dim={len(test_vec[0])}"
+    except Exception as e:
+        return {"failed_at": "embedding", "error": str(e), "steps": steps}
+    # Step 4: Index one chunk
+    try:
+        import uuid as _uuid
+        c.index(index=INDEX, id=str(_uuid.uuid4()), body={
+            "doc_id": "test_doc", "title": "Test", "source": "test",
+            "text": "test chemistry text", "idx": 0,
+            "embedding": test_vec[0]})
+        c.indices.refresh(index=INDEX)
+        n = c.count(index=INDEX)["count"]
+        steps["index_chunk"] = f"ok - total={n}"
+    except Exception as e:
+        return {"failed_at": "indexing", "error": str(e), "steps": steps}
+    return {"status": "all steps passed", "steps": steps}
 
 @app.post("/query")
 def query_ep(r: QR):
