@@ -85,12 +85,12 @@ with st.sidebar:
 # ── HOME ──────────────────────────────────────────────────────────────────────
 if page == "🏠 Home":
     st.title("🧪 ChemRAG — Production RAG System")
-    st.caption("ChemBERT 768-dim · OpenSearch HNSW + BM25 hybrid · Groq LLM · Dr. Mushtaq Ali · KIT")
+    st.caption("all-MiniLM-L6-v2 384-dim · OpenSearch HNSW + BM25 hybrid · Groq LLM · Dr. Mushtaq Ali · KIT")
 
     health = api_get("/health")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Chunks",       health.get("chunks", 0))
-    c2.metric("Embedding",    "ChemBERT")
+    c2.metric("Embedding",    "all-MiniLM")
     c3.metric("Index",        "HNSW")
     c4.metric("Retrieval",    "Hybrid")
 
