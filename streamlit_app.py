@@ -165,7 +165,8 @@ elif page == "💬 Ask ChemRAG":
                 x=[s["score"] for s in sources],
                 y=[s["title"][:35] for s in sources],
                 orientation="h",
-                marker_color=["#2d6a4f" if i == 0 else "#68d391" for i in range(len(sources))],
+                marker_color=["#2d6a4f" if i == 0 else "#68d391"
+                              for i in range(len(sources))],
                 text=[f"{s['score']:.3f}" for s in sources],
                 textposition="outside",
             ))
@@ -179,6 +180,222 @@ elif page == "💬 Ask ChemRAG":
             with st.expander(f"📄 {s['title']}  (score: {s['score']:.4f})"):
                 st.write(f"**Source:** {s['source']}")
                 st.write(s["excerpt"])
+
+    # ── 🧬 Molecule Structure Viewer ──────────────────────────────────────────
+    st.divider()
+    st.subheader("🧬 Molecule Structure Viewer")
+    st.caption("Detected chemical compounds from the answer — structures fetched from PubChem")
+
+    import re as _re
+    answer_text = result.get("answer", "")
+
+    # Known chemistry compounds to detect
+    COMPOUNDS = [
+        "aspirin", "ibuprofen", "caffeine", "paracetamol", "acetaminophen",
+        "glucose", "ethanol", "benzene", "acetone", "cholesterol",
+        "dopamine", "serotonin", "adrenaline", "insulin", "penicillin",
+        "morphine", "codeine", "nicotine", "cortisol", "testosterone",
+        "acetic acid", "citric acid", "lactic acid", "urea", "glycine",
+    ]
+
+    found = []
+    answer_lower = answer_text.lower()
+    for compound in COMPOUNDS:
+        if compound in answer_lower:
+            found.append(compound)
+
+    if found:
+        cols = st.columns(min(len(found), 3))
+        for i, compound in enumerate(found[:3]):
+            with cols[i]:
+                img_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{compound}/PNG?image_size=300x300"
+                try:
+                    r = requests.get(img_url, timeout=5)
+                    if r.status_code == 200:
+                        st.image(r.content, caption=compound.title(), use_container_width=True)
+                        cid_r = requests.get(
+                            f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{compound}/cids/JSON",
+                            timeout=5)
+                        if cid_r.status_code == 200:
+                            cid = cid_r.json()["IdentifierList"]["CID"][0]
+                            st.caption(f"[PubChem CID {cid}](https://pubchem.ncbi.nlm.nih.gov/compound/{cid})")
+                except Exception:
+                    pass
+    else:
+        # Let user search manually
+        st.caption("No compounds auto-detected. Search manually:")
+        compound_input = st.text_input(
+            "Enter compound name",
+            placeholder="e.g. aspirin, caffeine, ibuprofen",
+            key="compound_search"
+        )
+        if compound_input:
+            img_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{compound_input}/PNG?image_size=300x300"
+            try:
+                r = requests.get(img_url, timeout=5)
+                if r.status_code == 200:
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        st.image(r.content, caption=compound_input.title(),
+                                use_container_width=True)
+                    # Get properties
+                    props_r = requests.get(
+                        f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{compound_input}/property/MolecularFormula,MolecularWeight,IUPACName,XLogP/JSON",
+                        timeout=5)
+                    if props_r.status_code == 200:
+                        props = props_r.json()["PropertyTable"]["Properties"][0]
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric("Formula", props.get("MolecularFormula", "N/A"))
+                        c2.metric("MW", f"{props.get('MolecularWeight', 'N/A')} g/mol")
+                        c3.metric("LogP", props.get("XLogP", "N/A"))
+                        c4.metric("CID", props.get("CID", "N/A"))
+                else:
+                    st.warning(f"Compound not found: {compound_input}")
+            except Exception as e:
+                st.error(f"PubChem error: {e}")
+
+    # ── 📊 RAGAS Quality Evaluation ───────────────────────────────────────────
+    st.divider()
+    st.subheader("📊 Answer Quality Evaluation")
+    st.caption("RAGAS-style evaluation — faithfulness, source quality, query-context relevance")
+
+    if st.button("🧪 Evaluate Answer Quality", type="secondary"):
+        with st.spinner("Evaluating answer quality..."):
+            key = None
+            try:
+                key = st.secrets.get("GROQ_API_KEY", "")
+            except Exception:
+                pass
+            if not key:
+                import os
+                key = os.environ.get("GROQ_API_KEY", "")
+
+            if not key:
+                st.warning("Add GROQ_API_KEY to Streamlit secrets for evaluation")
+            else:
+                context = " ".join([s["excerpt"] for s in sources])[:2000]
+                answer  = result["answer"]
+                question_text = st.session_state.get("lq", "")
+                headers = {"Authorization": f"Bearer {key}",
+                           "Content-Type": "application/json"}
+
+                scores = {}
+
+                # 1. Faithfulness
+                try:
+                    r1 = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers=headers,
+                        json={"model": "llama-3.1-8b-instant",
+                              "temperature": 0.0, "max_tokens": 100,
+                              "messages": [{"role": "user", "content":
+                                f"Rate from 0.0 to 1.0: what fraction of claims in this Answer are supported by this Context? Reply with only a decimal number.\n\nContext: {context[:800]}\n\nAnswer: {answer}"}]},
+                        timeout=15)
+                    val = r1.json()["choices"][0]["message"]["content"].strip()
+                    scores["Faithfulness"] = float(''.join(c for c in val if c.isdigit() or c == '.'))
+                except Exception:
+                    scores["Faithfulness"] = 0.0
+
+                # 2. Answer Relevance
+                try:
+                    r2 = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers=headers,
+                        json={"model": "llama-3.1-8b-instant",
+                              "temperature": 0.0, "max_tokens": 100,
+                              "messages": [{"role": "user", "content":
+                                f"Rate from 0.0 to 1.0: how well does this Answer address this Question? Reply with only a decimal number.\n\nQuestion: {question_text}\n\nAnswer: {answer}"}]},
+                        timeout=15)
+                    val = r2.json()["choices"][0]["message"]["content"].strip()
+                    scores["Answer Relevance"] = float(''.join(c for c in val if c.isdigit() or c == '.'))
+                except Exception:
+                    scores["Answer Relevance"] = 0.0
+
+                # 3. Source Quality
+                try:
+                    r3 = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers=headers,
+                        json={"model": "llama-3.1-8b-instant",
+                              "temperature": 0.0, "max_tokens": 100,
+                              "messages": [{"role": "user", "content":
+                                f"Rate from 0.0 to 1.0: how high quality and credible are these source documents for answering chemistry questions? Reply with only a decimal number.\n\nSources: {context[:800]}"}]},
+                        timeout=15)
+                    val = r3.json()["choices"][0]["message"]["content"].strip()
+                    scores["Source Quality"] = float(''.join(c for c in val if c.isdigit() or c == '.'))
+                except Exception:
+                    scores["Source Quality"] = 0.0
+
+                # 4. Query-Context Relevance
+                try:
+                    r4 = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers=headers,
+                        json={"model": "llama-3.1-8b-instant",
+                              "temperature": 0.0, "max_tokens": 100,
+                              "messages": [{"role": "user", "content":
+                                f"Rate from 0.0 to 1.0: how relevant is this Context to answering this Question? Reply with only a decimal number.\n\nQuestion: {question_text}\n\nContext: {context[:800]}"}]},
+                        timeout=15)
+                    val = r4.json()["choices"][0]["message"]["content"].strip()
+                    scores["Context Relevance"] = float(''.join(c for c in val if c.isdigit() or c == '.'))
+                except Exception:
+                    scores["Context Relevance"] = 0.0
+
+                # Cap all scores at 1.0
+                scores = {k: min(v, 1.0) for k, v in scores.items()}
+                overall = round(sum(scores.values()) / len(scores), 2)
+
+                # Display metrics
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric("Faithfulness",      f"{scores['Faithfulness']:.2f}",
+                          help="Fraction of answer claims supported by retrieved context")
+                c2.metric("Answer Relevance",  f"{scores['Answer Relevance']:.2f}",
+                          help="How well answer addresses the question")
+                c3.metric("Source Quality",    f"{scores['Source Quality']:.2f}",
+                          help="Quality and credibility of retrieved sources")
+                c4.metric("Context Relevance", f"{scores['Context Relevance']:.2f}",
+                          help="How relevant retrieved chunks are to the question")
+                c5.metric("Overall",           f"{overall:.2f}",
+                          help="Average of all four metrics")
+
+                # Radar chart
+                import plotly.graph_objects as go_radar
+                categories = list(scores.keys()) + [list(scores.keys())[0]]
+                values     = list(scores.values()) + [list(scores.values())[0]]
+                fig_radar  = go_radar.Figure(go_radar.Scatterpolar(
+                    r=values, theta=categories,
+                    fill="toself",
+                    fillcolor="rgba(45,106,79,0.2)",
+                    line=dict(color="#2d6a4f", width=2),
+                ))
+                fig_radar.update_layout(
+                    polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                    title="RAGAS Quality Radar",
+                    height=350,
+                    margin=dict(l=40, r=40, t=60, b=40),
+                )
+                st.plotly_chart(fig_radar, use_container_width=True)
+
+                # Interpretation
+                if overall >= 0.8:
+                    st.success("Excellent answer quality — high faithfulness and relevance")
+                elif overall >= 0.6:
+                    st.info("Good answer quality — answer is mostly grounded in context")
+                elif overall >= 0.4:
+                    st.warning("Moderate quality — some claims may not be fully supported")
+                else:
+                    st.error("Low quality — consider ingesting more relevant documents")
+
+                # GROQ API key for evaluation
+                try:
+                    groq_secrets = st.secrets.get("GROQ_API_KEY_EVAL", "")
+                except Exception:
+                    groq_secrets = ""
+
+                st.caption(
+                    "RAGAS metrics: Faithfulness (grounding), Answer Relevance (addresses question), "
+                    "Source Quality (document credibility), Context Relevance (retrieval precision)"
+                )
 
 # ── INGEST ────────────────────────────────────────────────────────────────────
 elif page == "📥 Ingest":
